@@ -57,14 +57,11 @@ func main() {
 			return
 		}
 
-		log.Println("Requested tokens:", req.TokensRequested)
-
 		redisKey := limiter.BuildKey(req.TenantId, req.Resource, req.Key)
 
 		now := time.Now().Unix()
 
 		rule, ok := ruleStore.Get(req.TenantId, req.Resource)
-
 		if !ok {
 			http.Error(w, "no rate limit rule found", http.StatusNotFound)
 			return
@@ -95,6 +92,35 @@ func main() {
 		)
 
 		json.NewEncoder(w).Encode(resp)
+	})
+
+	http.HandleFunc("/v1/rules", func(w http.ResponseWriter, r *http.Request) {
+
+		switch r.Method {
+		case http.MethodPost:
+			var req api.CreateRuleRequest
+
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
+
+			ruleStore.Add(rules.Rule{
+				TenantId:   req.TenantId,
+				Resource:   req.Resource,
+				Capacity:   req.Capacity,
+				RefillRate: req.RefillRate,
+			})
+
+			w.WriteHeader(http.StatusCreated)
+
+		case http.MethodGet:
+			allRules := ruleStore.List()
+			json.NewEncoder(w).Encode(allRules)
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	})
 
 	log.Println("Starting server on :8080")

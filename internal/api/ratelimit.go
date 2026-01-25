@@ -1,7 +1,7 @@
 package api
 
 type RateLimitRequest struct {
-	TenantId        string `json:"tennant_id"`
+	TenantId        string `json:"tenant_id"`
 	Resource        string `json:"resource"`
 	Key             string `json:"key"`
 	TokensRequested int64  `json:"tokens_requested"`

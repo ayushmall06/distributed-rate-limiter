@@ -20,3 +20,17 @@ func (s *Store) Get(tenant, resource string) (Rule, bool) {
 	rule, exists := s.rules[key]
 	return rule, exists
 }
+
+func (s *Store) List() []Rule {
+	result := make([]Rule, 0)
+
+	for _, rule := range s.rules {
+		result = append(result, rule)
+	}
+	return result
+}
+
+func (s *Store) Delete(tenant, resource string) {
+	key := tenant + ":" + resource
+	delete(s.rules, key)
+}

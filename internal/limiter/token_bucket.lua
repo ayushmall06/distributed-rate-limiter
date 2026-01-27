@@ -36,4 +36,18 @@ redis.call("HMSET", key,
 
 redis.call("EXPIRE", key, 120) -- Set TTL to avoid stale keys
 
-return {allowed, tokens}
+local retry_after_ms = 0
+
+if allowed == 0 then
+    if refill_rate > 0 then
+        local missing = tokens_requested - tokens
+        local wait_second = missing / refill_rate
+        retry_after_ms = math.ceil(wait_second * 1000)
+    else
+        retry_after_ms = -1 -- Indicate that no tokens will ever be available
+    end
+end
+
+redis.call("HSET", key, "last_refill_ts", now)
+
+return {allowed, tokens, retry_after_ms}

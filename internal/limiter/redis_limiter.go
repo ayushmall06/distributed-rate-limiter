@@ -2,6 +2,7 @@ package limiter
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/redis/go-redis/v9"
@@ -33,19 +34,21 @@ func (l *RedisLimiter) Allow(
 	refillRate int64,
 	capacity int64,
 	tokensRequested int64,
-) (bool, int64, error) {
+) (bool, int64, int64, error) {
 
 	res, err := l.script.Run(ctx, l.rdb, []string{key},
 		now, refillRate, capacity, tokensRequested,
 	).Result()
 
 	if err != nil {
-		return false, 0, err
+		fmt.Println("Lua error:", err)
+		return false, 0, 0, err
 	}
 
 	arr := res.([]interface{})
 	allowed := arr[0].(int64) == 1
 	remaining := arr[1].(int64)
+	retryAfterMs := arr[2].(int64)
 
-	return allowed, remaining, nil
+	return allowed, remaining, retryAfterMs, nil
 }

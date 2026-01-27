@@ -34,14 +34,14 @@ func main() {
 		log.Fatal("Failed to initialize RedisLimiter:", err)
 	}
 
-	ruleStore := rules.NewStore()
+	ruleStore := rules.NewRedisStore(rdb)
 
-	ruleStore.Add(rules.Rule{
-		TenantId:   "search",
-		Resource:   "/search",
-		Capacity:   10,
-		RefillRate: 1,
-	})
+	// ruleStore.Add(rules.Rule{
+	// 	TenantId:   "search",
+	// 	Resource:   "/search",
+	// 	Capacity:   10,
+	// 	RefillRate: 1,
+	// })
 
 	// 3. HTTP Health Check
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -58,16 +58,23 @@ func main() {
 		}
 
 		redisKey := limiter.BuildKey(req.TenantId, req.Resource, req.Key)
+		log.Printf(" Redis Key : %s\n", redisKey)
 
 		now := time.Now().Unix()
 
-		rule, ok := ruleStore.Get(req.TenantId, req.Resource)
+		rule, ok, err := ruleStore.Get(ctx, req.TenantId, req.Resource)
+		if err != nil {
+			http.Error(w, "rule lookup failed", http.StatusInternalServerError)
+			return
+		}
 		if !ok {
 			http.Error(w, "no rate limit rule found", http.StatusNotFound)
 			return
 		}
 
-		allowed, remaining, err := rl.Allow(
+		log.Printf(" Rule : %s\n", rule.Resource)
+
+		allowed, remaining, retryAfterMs, err := rl.Allow(
 			ctx,
 			redisKey,
 			now,
@@ -84,7 +91,7 @@ func main() {
 		resp := api.RateLimitResponse{
 			Allowed:      allowed,
 			Remaining:    remaining,
-			RetryAfterMs: 0,
+			RetryAfterMs: retryAfterMs,
 		}
 
 		w.Header().Set(
@@ -105,7 +112,12 @@ func main() {
 				return
 			}
 
-			ruleStore.Add(rules.Rule{
+			if err != nil {
+				http.Error(w, "failed to store rule", http.StatusInternalServerError)
+				return
+			}
+
+			ruleStore.Add(ctx, rules.Rule{
 				TenantId:   req.TenantId,
 				Resource:   req.Resource,
 				Capacity:   req.Capacity,
@@ -115,7 +127,7 @@ func main() {
 			w.WriteHeader(http.StatusCreated)
 
 		case http.MethodGet:
-			allRules := ruleStore.List()
+			allRules, _ := ruleStore.List(ctx)
 			json.NewEncoder(w).Encode(allRules)
 
 		default:

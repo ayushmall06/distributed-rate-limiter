@@ -1,119 +1,291 @@
 # Distributed Rate Limiter as a Service (RLaaS)
 
 ## Problem Statement
-Modern backend systems are horizontally scaled and distributed.
-Traditional in-memory rate limiting fails under such environments,
-while naive centralized approaches become bottlenecks or single points of failure.
 
-Teams often re-implement rate limiting logic per service, leading to
-inconsistent behavior, operational complexity, and duplicated effort.
+Modern backend systems are distributed and horizontally scalable.
+In such systems, implementing rate limiting inside individual services leads to:
 
-RLaaS provides a centralized, scalable, and configurable rate limiting
-service that can be used by any service via a simple API.
+- Inconsistent behavior across instances
+- Difficulty enforcing global limits
+- Code duplication
+- Operational complexity
 
-## Goals
-- Low latency enforcement (P99 < 10ms)
-- Horizontally scalable API layer
-- Strong consistency for rate enforcement (MVP)
-- Simple integration via HTTP/gRPC
+A centralized rate limiting service solves these problems by providing a **single source of truth** for request limits.
 
-## Non-Goals (v1)
-- Multi-region enforcement
-- UI dashboard
-- Advanced anomaly detection
-- Perfect global consistency under network partitions
+This project implements a **Distributed Rate Limiter as a Service (RLaaS)** that can be used by any backend service via HTTP.
 
-## Architecture (MVP)
-Client → RLaaS API → Redis
+## High Level Goals
 
-## Rate Limiting Algorithm
-- Token Bucket
+- Enforce request limits **consistently across distributed service**
+- Support **burst traffic** while preventing abuse
+- Provide **client friendly responses** (retry hints)
+- Separate **configuration (control plane)** from **request enforcement (data plane)**
+- Be restart-safe and horizontally scalable
 
-## Terminology
+### Explicit Non-Goals (Current Version)
+
+- Multi-region replication
+- UI Dashboard
+- Authentication/ authorization
+- Per-user quotas across multiple resources
+
+## System Architecture Overview
+
+```graph
+Client
+  |
+  | HTTP request
+  |
+  v
+RLaaS API (Go)
+  |
+  | Redis Lua Script (atomic)
+  |
+  v
+Redis (shared state)
+```
+
+### Key architectural principles
+
+- Stateless service layer
+- State stored externally (Redis)
+- Atomic enforcement using Lua
+- Clear separation of responsibilities
+
+## Core Concepts & Terminology
 
 ### Tenant
-An organization or service using RLaaS.  
-Example: `search-service`
+
+A logical owner of rate limits (e.g. `payments`, `search`).
 
 ### Resource
-A protected API or logical endpoint.  
-Examples:
-- `/search`
-- `/api/v1/login`
-- `checkout`
+
+The protected endpoint or operation (e.g. `/charge`, `/search`).
 
 ### Key
-The entity being rate-limited.  
-Examples:
-- `user_id`
-- `api_key`
-- `ip_address`
+
+The entity being rate-limited (e.g. user ID, API key).
 
 ### Rule
-Defines rate limiting behavior for a tenant and resource.
 
-Attributes:
-- tenant_id
-- resource
-- limit
-- window_sec
-- burst
+Configuration defining how requests are limited:
+
+- Capacity
+- Refill rate
 
 ### Bucket
-Runtime state used for enforcement.
 
-Attributes:
-- tokens
-- last_refill_timestamp
+Runtime state used by the tocken bucket algorithm:
+
+- `token`
+- `last_refill_ts`
+
+## Rate Limiting Algorithm Choice
+
+### Algorithm Used: Token Bucket
+
+#### Why Token Bucket ?
+
+- Allows short bursts of traffic
+- Smooths request rate over time
+- Widely used in production systems
+- Client-friendly behavior
+
+#### Core Idea
+
+- A bucket has a maximum capacity
+- Tokens refill at a fixed rate
+- Each request consumes tokens
+- Requests are rejected if insufficient tokens exists
+
+## Redis Data Model
+
+### Rate Limit Buckets
+
+#### Redis Key Format
+
+```note
+rl:{tenant}:{resource}:{key}
+```
+
+#### Redis Value (Hash)
+
+```note
+tokens
+last_refill_ts
+```
+
+#### TTL
+
+- Buckets expire automatically after inactivity
+- Prevents unbounded memory growth
+
+### Rules Storage
+
+#### Redis Key Format (Rule)
+
+```note
+rule:{tenant}:{resource}
+```
+
+#### Redis Value (Hash) (Rule)
+
+```note
+capcaity
+refill_rate
+```
+
+Rules are stored persistently and survive service restarts.
+
+## Atomic Environment Using Redis Lua
+
+### Why Lua?
+
+- Redis executes Lua scripts atomically
+- Prevents race conditions
+- Combines read-modify-write safely
+
+### Lua Responsibilities
+
+1. Load existing bucket state
+2. Refill tokens based on elapsed time
+3. Check token availability
+4. Update bucket state
+5. Compute retry time if blocked
+
+### Key Insight
+
+> All time-sensitive state logic lives inside Redis
+
+## Retry-After Semantics
+
+### Purpose
+
+When a request is blocked, clients need to know **when to retry.**
+
+### Behavior
+
+- If refill rate > 0 -> compute exact wait time
+- If refill rate = 0 -> retry is impossible (`retry_after_time_ms = -1`)
+
+### Why Computed in Lua?
+
+- Lua has authorative state
+- Prevents race conditions
+- Guarantees correctness
 
 ## API Design
 
-### Rate Limit Check (Hot Path)
+### Rate Limit Check (Data Plane)
 
-**POST** `/v1/ratelimit/check`
+#### Endpoint
 
-## Request:
-```json
+```Note
+POST /v1/ratelimit/check
+```
+
+#### Request
+
+```note
 {
-  "tenant_id": "search-service",
-  "resource": "/search",
-  "key": "user_123",
-  "tokens": 1
+  "tenant_id": "payments",
+  "resource": "/charge",
+  "key": "user1",
+  "tokens_requested": 1
 }
+```
 
-Response:
+#### Response
+
+```note
 {
   "allowed": true,
-  "remaining": 42,
+  "remaining": 4,
   "retry_after_ms": 0
 }
-
 ```
-## Notes:
-- tokens supports weighted requests
-- No rule evaluation logic on the client
 
-## Rule Management (Control Plane)
+### Rule Management (Control Plane)
+
+#### Endpoints
+
+```note
 POST /v1/rules
-GET /v1/rules/{tenant_id}
-DELETE /v1/rules/{rule_id}
+GET /v1/rules
+```
 
-Rule Example:
-{
-  "tenant_id": "search-service",
-  "resource": "/search",
-  "limit": 100,
-  "window_sec": 60,
-  "burst": 20
-}
+Rules can be added dynamically without restarting the service.
 
-# Failure & Consistency Decisions
-## Redis Unavailable
-- Fail-open (requests are allowed)
-- Reason: availability > strict enforcement
-## No Rule Found
-- Allow request
-- Emit metric for observability
-## Time Source
-- Redis server time is authoritative
-- Client timestamps are never trusted
+## Control Plane vs Data Plane
+
+### Control Plane
+
+- Rule creation and management
+- Low QPS
+- Configuration-focused
+
+### Data Plane
+
+- Rate limit checks
+- High QPS
+- Latency-critical
+
+This separation ensures scalability and correctness.
+
+## Failure Handling & Edge Cases
+
+### Redis unavailable
+
+- Fail-open strategy (configurable later)
+
+### Zero refill rate
+
+- No token regeneration
+- Retry-after = -1
+
+### Input Validation
+
+- Reject malformed requests early
+- Prevent silent failures
+
+## Observed Debugging Learnings
+
+During developement, several real-world issues were encoutered:
+
+- Silent JSON field mismatches
+- Lua-Go integration mismatches
+- Token bucket refill masking consumption
+- Redis state visibility issues
+
+These reflect **actual production debugging scenarios**, not toy problems.
+
+## Current Limitations
+
+- Single Redis instance
+- No metics
+- No authentication
+- No unit tests
+- No multi-region support
+
+These are **intentional**, not oversights.
+
+## Roadmap (Planned Enhancements)
+
+1. Prometheus metrics
+2. Unit and Integration tests
+3. Multiple rate limiting algorithms
+4. Rate-limit headers
+5. Redis clustering
+6. Multi-region support
+
+## Summary
+
+This project demonstrates:
+
+- Distributed system thinking
+- Correct use of Redis and Lua
+- Clear API contracts
+- Control plane vs data place separation
+- Real-world debugging and correctness
+
+It is designed to evolve incrementally into a production-grade system.

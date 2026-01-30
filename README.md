@@ -1,6 +1,6 @@
 # Distributed Rate Limiter as a Service (RLaaS)
 
-## Problem Statement
+## 1. Problem Statement
 
 Modern backend systems are distributed and horizontally scalable.
 In such systems, implementing rate limiting inside individual services leads to:
@@ -14,7 +14,7 @@ A centralized rate limiting service solves these problems by providing a **singl
 
 This project implements a **Distributed Rate Limiter as a Service (RLaaS)** that can be used by any backend service via HTTP.
 
-## High Level Goals
+## 2. High Level Goals
 
 - Enforce request limits **consistently across distributed service**
 - Support **burst traffic** while preventing abuse
@@ -29,7 +29,7 @@ This project implements a **Distributed Rate Limiter as a Service (RLaaS)** that
 - Authentication/ authorization
 - Per-user quotas across multiple resources
 
-## System Architecture Overview
+## 3. System Architecture Overview
 
 ```graph
 Client
@@ -52,7 +52,7 @@ Redis (shared state)
 - Atomic enforcement using Lua
 - Clear separation of responsibilities
 
-## Core Concepts & Terminology
+## 4. Core Concepts & Terminology
 
 ### Tenant
 
@@ -80,7 +80,7 @@ Runtime state used by the tocken bucket algorithm:
 - `token`
 - `last_refill_ts`
 
-## Rate Limiting Algorithm Choice
+## 5. Rate Limiting Algorithm Choice
 
 ### Algorithm Used: Token Bucket
 
@@ -98,7 +98,7 @@ Runtime state used by the tocken bucket algorithm:
 - Each request consumes tokens
 - Requests are rejected if insufficient tokens exists
 
-## Redis Data Model
+## 6. Redis Data Model
 
 ### Rate Limit Buckets
 
@@ -137,7 +137,7 @@ refill_rate
 
 Rules are stored persistently and survive service restarts.
 
-## Atomic Environment Using Redis Lua
+## 7. Atomic Environment Using Redis Lua
 
 ### Why Lua?
 
@@ -157,7 +157,7 @@ Rules are stored persistently and survive service restarts.
 
 > All time-sensitive state logic lives inside Redis
 
-## Retry-After Semantics
+## 8. Retry-After Semantics
 
 ### Purpose
 
@@ -174,7 +174,7 @@ When a request is blocked, clients need to know **when to retry.**
 - Prevents race conditions
 - Guarantees correctness
 
-## API Design
+## 9. API Design
 
 ### Rate Limit Check (Data Plane)
 
@@ -216,7 +216,7 @@ GET /v1/rules
 
 Rules can be added dynamically without restarting the service.
 
-## Control Plane vs Data Plane
+## 10. Control Plane vs Data Plane
 
 ### Control Plane
 
@@ -232,7 +232,7 @@ Rules can be added dynamically without restarting the service.
 
 This separation ensures scalability and correctness.
 
-## Failure Handling & Edge Cases
+## 11. Failure Handling & Edge Cases
 
 ### Redis unavailable
 
@@ -248,11 +248,125 @@ This separation ensures scalability and correctness.
 - Reject malformed requests early
 - Prevent silent failures
 
-## Observability Philosophy
+## 12. Observability & Metrics
 
-The rate limiter exposes Prometheus metrics to provide real-life visibility into request behavior, enforcement decisions, and system health.
+### Motivation
 
-Metrics are preferred over logs for alerting, capacity planning, and abuse detection.
+In a production rate limiter, correctness alone is insufficient.
+
+Operators must be able to answer questions such as:
+
+- How many requests are being rate limited ?
+- Which tenants or resources are being throttled ?
+- Is the limiter introducing latency ?
+- Are internal errors occuring ?
+
+To support this, the system exposes **Prometheus-compatible metrics** that provide real-time visibility into rate-limiting behavior.
+
+### Metric Philosophy
+
+The system follows these observability principles:
+
+- **Metrics over logs** for alerting and trend analysis
+- **Event-based counters** instead of per-request logs
+- **Low cardinality labels** to avoid metric explosion
+- **Clear separation** between business metrics and runtime metrics
+
+Metrics are collected only for **valid, processed requests** to ensure accuracy.
+
+### Metics Exposed
+
+The following core metrics are exposed:
+
+#### Request Metrocs
+
+| **Metic Name** | **Type** | **Labels** | **Description** |
+|----------------|----------|------------|-----------------|
+| `rate_limit_requests_total` | Counter | tenant, resource | Total number of rate limit checks |
+| `rate_limit_allowed_total` | Counter | tenant, resource | Total number of allowed requests |
+| `rate_limit_blocked_total` | Counter | tenant, resource | Total number of blocked requests |
+
+These metrics enable:
+
+- Traffic volume analysis
+- Abuse detection
+- Rule effectiveness validation
+
+#### Error Metrics
+
+| **Metric Name** | **Type** | **Labels** | **Description** |
+|-----------------|----------|------------|-----------------|
+|`rate_limit_errors_total`| Counter | none | Total number of internal limiter errors |
+
+This metric is used to:
+
+- Detect Redis or Lua execution failures
+- Alert on system instablility
+
+#### Latency Metrics
+
+| **Metric Name** | **Type** | **Labels** | **Description** |
+|-----------------|----------|------------|-----------------|
+|`rate_limit_latency_ms`| Histogram | tenant, resource | End-to-end latency of rate limit checks |
+
+Latency is measured at the HTTP handler level and includes:
+
+- Request validation
+- Redis round-trip
+- Lua script execution
+
+### Metrics Endpoint
+
+The service exposes a Prometheus scrape endpoint:
+```bash
+GET /metrics
+```
+
+This endpoint returns:
+
+- Go runtime metrics (GC, memory, goroutines)
+- Custom rate limiter analytics
+
+The endpoint is designed to be scraped periodically by Prometheus.
+
+### Metric Lifecycle
+
+A metric becomes visible only after it is **observed atleast once**.
+
+For example:
+
+- `rate_limit_requests_total` appears only after the first successful rate-limit check
+- Runtime metrics appear immediately on startup
+
+This behavior is consistent with Prometheus client semantics.
+
+### Correct Instrumentaion Semantics
+
+Metrics are recorded using the following ordering:
+
+1. Request validation
+2. Request counting
+3. Rate limit enforcement
+4. Allowed/blocked classification
+5. Latency observation
+
+This ensures:
+
+- Invlid requests are not counted
+- Errors are traced separately
+- Latency reflects real limiter behavior
+
+### Operational Use Cases
+
+This exposed metrics enable:
+
+- **Alerting**
+  - Sudden spikes in blocked requests
+  - Increase in internal errors
+- **Capacity planning**
+  - Identifying hot tenants/resources
+- **Debugging**
+  - Correlating latency with Redis behavior
 
 ## Observed Debugging Learnings
 

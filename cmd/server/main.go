@@ -9,7 +9,10 @@ import (
 
 	"distributed-rate-limiter/internal/api"
 	"distributed-rate-limiter/internal/limiter"
+	"distributed-rate-limiter/internal/metrics"
 	"distributed-rate-limiter/internal/rules"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -27,6 +30,12 @@ func main() {
 	}
 
 	log.Println("Connected to Redis successfully")
+
+	// Register Prometheus metrics
+	metrics.Register()
+
+	// Expose Prometheus metrics endpoint
+	http.Handle("/metrics", promhttp.Handler())
 
 	// 2. Initialize RedisLimiter
 	rl, err := limiter.NewRedisLimiter(rdb)
@@ -50,12 +59,22 @@ func main() {
 
 	// 4. Rate Limit Endpoint
 	http.HandleFunc("/v1/ratelimit/check", func(w http.ResponseWriter, r *http.Request) {
-		var req api.RateLimitRequest
+		start := time.Now()
 
+		var req api.RateLimitRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
+			metrics.ErrorsTotal.Inc()
 			return
 		}
+
+		if req.TenantId == "" || req.Resource == "" {
+			http.Error(w, "tenant_id and resource are required", http.StatusBadRequest)
+			metrics.ErrorsTotal.Inc()
+			return
+		}
+
+		metrics.RequestsTotal.WithLabelValues(req.TenantId, req.Resource).Inc()
 
 		redisKey := limiter.BuildKey(req.TenantId, req.Resource, req.Key)
 		log.Printf(" Redis Key : %s\n", redisKey)
@@ -65,10 +84,12 @@ func main() {
 		rule, ok, err := ruleStore.Get(ctx, req.TenantId, req.Resource)
 		if err != nil {
 			http.Error(w, "rule lookup failed", http.StatusInternalServerError)
+			metrics.ErrorsTotal.Inc()
 			return
 		}
 		if !ok {
 			http.Error(w, "no rate limit rule found", http.StatusNotFound)
+			metrics.ErrorsTotal.Inc()
 			return
 		}
 
@@ -83,8 +104,15 @@ func main() {
 			req.TokensRequested,
 		)
 
+		if allowed {
+			metrics.AllowedTotal.WithLabelValues(req.TenantId, req.Resource).Inc()
+		} else {
+			metrics.BlockedTotal.WithLabelValues(req.TenantId, req.Resource).Inc()
+		}
+
 		if err != nil {
 			http.Error(w, "rate limiter error", http.StatusInternalServerError)
+			metrics.ErrorsTotal.Inc()
 			return
 		}
 
@@ -99,6 +127,8 @@ func main() {
 		)
 
 		json.NewEncoder(w).Encode(resp)
+
+		metrics.LatencyMs.WithLabelValues(req.TenantId, req.Resource).Observe(float64(time.Since(start).Milliseconds()))
 	})
 
 	http.HandleFunc("/v1/rules", func(w http.ResponseWriter, r *http.Request) {

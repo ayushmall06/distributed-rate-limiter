@@ -248,6 +248,12 @@ This separation ensures scalability and correctness.
 - Reject malformed requests early
 - Prevent silent failures
 
+## Observability Philosophy
+
+The rate limiter exposes Prometheus metrics to provide real-life visibility into request behavior, enforcement decisions, and system health.
+
+Metrics are preferred over logs for alerting, capacity planning, and abuse detection.
+
 ## Observed Debugging Learnings
 
 During developement, several real-world issues were encoutered:

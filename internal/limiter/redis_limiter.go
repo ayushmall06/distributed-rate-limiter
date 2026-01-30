@@ -3,10 +3,14 @@ package limiter
 import (
 	"context"
 	"fmt"
-	"os"
+
+	_ "embed"
 
 	"github.com/redis/go-redis/v9"
 )
+
+//go:embed token_bucket.lua
+var tokenBucketLua string
 
 type RedisLimiter struct {
 	rdb    *redis.Client
@@ -14,12 +18,7 @@ type RedisLimiter struct {
 }
 
 func NewRedisLimiter(rdb *redis.Client) (*RedisLimiter, error) {
-	scriptBytes, err := os.ReadFile("internal/limiter/token_bucket.lua")
-	if err != nil {
-		return nil, err
-	}
-
-	script := redis.NewScript(string(scriptBytes))
+	script := redis.NewScript(tokenBucketLua)
 
 	return &RedisLimiter{
 		rdb:    rdb,

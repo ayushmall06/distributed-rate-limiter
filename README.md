@@ -318,6 +318,7 @@ Latency is measured at the HTTP handler level and includes:
 ### Metrics Endpoint
 
 The service exposes a Prometheus scrape endpoint:
+
 ```bash
 GET /metrics
 ```
@@ -367,6 +368,110 @@ This exposed metrics enable:
   - Identifying hot tenants/resources
 - **Debugging**
   - Correlating latency with Redis behavior
+
+## Testing Strategy
+
+### Motivation
+
+Correctness is a distributed rate limiter cannot be guaranteed through manual testing alone. Subtle bugs in state handling, time calculations, or Redis interactions can lead to incorrect enforcement or outages.
+
+To ensure long-term correctness and safe refactoring, the system includes both **unit tests** and **integration tests**.
+
+### Testing Philosophy
+
+The testing strategy follows these principles:
+
+- **Behavior over implementation**
+- **Real dependencies for stateful logic**
+- **Fail fast on setup errors**
+- **Clear separation between deterministic and stateful tests**
+
+Redis and Lua behavior is treated as a **black box** and validated through observable inputs and outputs.
+
+### Unit Tests
+
+Unit tests validate **deterministic, pure logic** that does not depend on extenal systems.
+
+#### Covered Areas
+
+- Redis key construction
+- Rule key formatting
+- Helper utilities
+- Configuration edge cases
+
+#### Characteristics
+
+- Fast execution
+- No external dependencies
+- Fully deterministic
+- Suitable for frequent execution
+
+Unit tests protect against accidental changes that could silently break Redis key consistency or rule lookups.
+
+### Integration Tests
+
+Integration tests validate the **full Redis + Lua execution path**.
+
+These tests ensure:
+
+- Atomic token bucket enforcement
+- Correct token consumption
+- Correct refill behavior over time
+- Correct handling of zero refill rate
+- Correct retry-after semantics
+
+Integration tests intentionally use a **real Redis instance** to surface issues that mocks would hide.
+
+### Redis Dependency Model
+
+Integration tests require a running Redis instance.
+
+If Redis is unavailable, tests fail explicitly with a clear error message. This behavior is intentional and mirrors productions dependencies.
+
+This approach ensures:
+
+- Realistic validation
+- Early detection of integration issues
+- No false confidence from mocked state
+
+### Lua Scirpt Embedding
+
+Lua scripts are embedded directly into the Go binary using `go:embed`.
+
+#### Rationale
+
+- Eliminates filesystem path dependencies
+- Ensures consistent behavior across:
+  - Local development
+  - Tests
+  - CI
+  - Docker
+  - Production
+
+Embedding guarantees that the exact smae script is executed in all environments.
+
+### Failure Handling in Tests
+
+Test setup failures (e.g., Redis unavailable, limiter initialization failure)
+cause immediate test termination.
+
+This prevents:
+
+- Nil pointer dereferences
+- Misleading test results
+- Masking of root causes
+
+Fail-fast behavior is considered mandatory for integration tests.
+
+### What is Explicitly Not Tested
+
+The following are intentionally excluded from unit tests:
+
+- Redis internal behavior
+- Lua runtime internals
+- Go Redis client internals
+
+These components are assumed correct and validated indirectly through integration tests.
 
 ## Observed Debugging Learnings
 

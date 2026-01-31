@@ -581,6 +581,27 @@ Planned improvements to alerting include:
 - Alert routing by severity
 - Integration with on-call rotation tools
 
+
+## Rate-Limit HTTP Headers
+
+The rate limiter exposes standard HTTP headers to communicate rate-limit state to clients in a lightweight and interoperable manner.
+
+### Headers Exposed
+
+- `X-RateLimit-Limit` : Maximum number of tokens allowed in the bucket.
+- `X-RateLimit-Remaining` : Number of tokenms remaining after the current request.
+- `X-RateLimit-Retry-After-Ms` : Time (in milliseconds) the client should wait before retrying when blocked.
+
+### Design Rationale
+
+Rate-limit headers allow clients, proxies, and API gateways to implement backoff and retry logic without parsing response bodies.
+
+Headers are set at the HTTP layer and are independent of the underlying rate-limiting algorithm.
+
+### Scope
+
+Headers are currently exposes for token bucket enforcement and may be extended to support additional algorithms in the future.
+
 ## Observed Debugging Learnings
 
 During developement, several real-world issues were encoutered:

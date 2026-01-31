@@ -582,7 +582,7 @@ Planned improvements to alerting include:
 - Integration with on-call rotation tools
 
 
-## Rate-Limit HTTP Headers
+## 15. Rate-Limit HTTP Headers
 
 The rate limiter exposes standard HTTP headers to communicate rate-limit state to clients in a lightweight and interoperable manner.
 
@@ -601,6 +601,115 @@ Headers are set at the HTTP layer and are independent of the underlying rate-lim
 ### Scope
 
 Headers are currently exposes for token bucket enforcement and may be extended to support additional algorithms in the future.
+
+## 16. Load Testing & Observed Behavior
+
+### Purpose
+
+Load testing was conducted to validate the rate limiter's behavior under realistic traffic patterns and to inform both **scalability decisions** and **dashboard design.**
+
+Unlike synthetic correctness tests, these load tests focused on:
+
+- Sustained traffic behavior
+- Burst handling
+- Latency under correction
+- Error visibility
+- Metrics suitability for end-user dashboards
+
+### Test Environment
+
+- Single-region deployment
+- Single Redis instance
+- Token Bucket algorithm (Redis + Lua)
+- Metrics collected via Prometheus endpoint
+- Traffic generated using `hey`
+
+The goal was to evaluate **baseline system behavior**, not maximum throughput.
+
+### Scenario A - Steady Traffic
+
+#### Description
+
+A steady stream of requests was generated for a single tenant and resource, simulating normal application usage exceeding the configured rate limit.
+
+#### Observation
+
+- Total requests significantly exceeded allowed capacity
+- Blocked requests dominated total traffic
+- Token bucket enforcement behaved deterministically
+- Latency remained low for most requests
+- A small number of internal errors were observed
+- Unexpected resource values appeared in metrics
+
+#### Key Metrics Observed
+
+- High blocked ratio (~99%)
+- Latency remained within acceptable bounds (sub~10ms tail)
+- Internal error counter incremented under load
+- Metics revealed unintended resource cardinality
+
+#### Interpretation
+
+The high blocked ration indicates a **misalignment between configured rate limits and observed traffic**, not a system failure.
+
+The system successfully protected downstream services but highlighted the need for visibility into rule effectiveness.
+
+Unexpected resource values demonstrate the importance of strict validation and anomaly detection in real-world usage.
+
+### Implications for Dashboard Design
+
+Load testing directly informed the initial dashboard feature set.
+
+### Required Dashboard Capabilities
+
+Based on observed behavior, the dashboard mush surface:
+
+- Allowed vs blocked request ratios
+- Blocked percentage over time
+- Per-tenant and per-resource traffic
+- Latency percentiles (p50, p95, p99)
+- Internal error indicators
+- Recently observed or unknown resources
+
+These insights are critical for users to:
+
+- Understand rule effectiveness
+- Detect misconfiguration
+- Identify abuse or anomalies
+- Trust system performance
+
+### Operational Learnings
+
+Load testing revealed several important operational realities:
+
+- Rate limiting correctness alone is sufficient without visibility
+- Misconfigured limits can appear as system failures without context
+- Real traffic introduces unexpected resource patterns
+- Metrics cardinality must be monitored carefully
+- Alerts on internal errors are justified even at low counts
+
+These findings reinforce the importance of **observability-first design.**
+
+### Design Decisions Influenced by Load Testing
+
+As a direct result of load testing:
+
+- Strict resource validation is prioritized 
+- Blocked ratio is treated as a first-class metric
+- Dashboard design is driven by real traffic behavior
+- Sharding decisions are deferred until multi-key load tests
+- Alert thresholds are validated against real data
+
+### Current Limitations Identified
+
+The following limitations were intentionally accepted at this stage:
+
+- Single Redis instance
+- Single-region deployment
+- Hot-key-dominant traffic patterns
+- No authentication or user isolation
+
+These limitations are addressed in subsequent phases.
 
 ## Observed Debugging Learnings
 

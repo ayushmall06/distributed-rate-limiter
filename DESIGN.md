@@ -369,7 +369,7 @@ This exposed metrics enable:
 - **Debugging**
   - Correlating latency with Redis behavior
 
-## Testing Strategy
+## 13. Testing Strategy
 
 ### Motivation
 
@@ -472,6 +472,114 @@ The following are intentionally excluded from unit tests:
 - Go Redis client internals
 
 These components are assumed correct and validated indirectly through integration tests.
+
+## 14. Alerting Configuration & File Orgranization
+
+### Purpose
+
+Alerting rules are part of the **operational configuration** of the rate limiter.
+They define _when humans should be notified_ based on system behavior observed through metrics.
+
+Alert rules are **not application code** and are therefore kept separate from the Go source tree.
+
+### Repository Layout for Alerting
+
+Alert rules are stored in a dedicated top-level directory:
+
+```go
+distributed-rate-limiter/
+├── alerts/
+│   └── rate_limiter_alerts.yml
+├── cmd/
+│   └── server/
+├── internal/
+├── DESIGN.md
+├── go.mod
+└── go.sum
+```
+
+This layout intentionally separates:
+
+| **Category** | **Location** | **Responsibility** |
+|--------------|--------------|--------------------|
+| Application Code | `cmd/`, `internal` | Runtime Behavior |
+| Alert Rules | `alerts/` | Operational Monitoring |
+| Documentation | `DESIGN.md` | System design & decisions |
+
+### Why Alerts are Kept Outside Application Code
+
+Alert rules are:
+
+- Evaluated by **Prometheus**, not by application
+- Changed independently of code deployments
+- Owned jointly by **engineering and operations**
+
+Keeping alerts outside the Go codebase ensures:
+
+- Clear separation of concerns
+- No coupling between runtime logic and monitoring policy
+- Safer operational changes without rebuilding binaries
+
+### Alert Rule File: `rate_limiter_alerts.yml`
+
+The file `alerts/rate_limiter_alerts.yml` contains all Prometheus alert rules related to the rate limiter.
+
+These rules monitor:
+
+- Service availability
+- Internal errors
+- Abnormal traffic patterns
+- Latency regressions
+
+The file is written in **Prometheus-native YML format** and is intended to be loaded by a Prometheus server.
+
+### How Alert Rules Are Used in Production
+
+In a real deployment, Prometheus is configured to load alert rules using:
+
+```yaml
+rule_files:
+  - "alerts/*.yaml"
+```
+
+Prometheus:
+
+1. Scrapes metrics from `/metrics`
+2. Evaluates alerts rules periodically
+3. Fires alerts when conditions are met
+4. Forwards alerts to AlertManager for notification
+
+The rate limiter service itself is **not aware of alert rules**.
+
+### Responsibily Boundaries
+
+| **Component** | **Responsibility** |
+|---------------|--------------------|
+|Rate Limiter Service | Emit Metrics |
+| Prometheus | Scrape emtrics and evaluate rules |
+| Alert Rules | Define failure conditions |
+| Alertmanager | Notify humans (Slack, PagerDuty, etc.) |
+
+This separation ensures the service remains **stateless and focused**, while observability concerns are handled externally.
+
+### Current Scope
+
+For this project:
+
+- Alert rules are **defined and version-controlled**
+- Prometheus and Alertmanager are **not run locally**
+- The focus is on **design correctness**, not deployment
+
+This mirrors how alerting is often introduced incrementally in real systems.
+
+### Future Enhancements (Planned)
+
+Planned improvements to alerting include:
+
+- Per-tenant alert thresholds
+- Environment-specific alert tuning
+- Alert routing by severity
+- Integration with on-call rotation tools
 
 ## Observed Debugging Learnings
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"distributed-rate-limiter/internal/api"
@@ -104,16 +105,24 @@ func main() {
 			req.TokensRequested,
 		)
 
-		if allowed {
-			metrics.AllowedTotal.WithLabelValues(req.TenantId, req.Resource).Inc()
-		} else {
-			metrics.BlockedTotal.WithLabelValues(req.TenantId, req.Resource).Inc()
-		}
-
 		if err != nil {
 			http.Error(w, "rate limiter error", http.StatusInternalServerError)
 			metrics.ErrorsTotal.Inc()
 			return
+		}
+
+		// Rate-limit headers
+		w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(remaining, 10))
+		w.Header().Set("X-RateLimit-Limit", strconv.FormatInt(rule.Capacity, 10))
+
+		if !allowed && retryAfterMs >= 0 {
+			w.Header().Set("X-RateLimit-Retry-After-Ms", strconv.FormatInt(retryAfterMs, 10))
+		}
+
+		if allowed {
+			metrics.AllowedTotal.WithLabelValues(req.TenantId, req.Resource).Inc()
+		} else {
+			metrics.BlockedTotal.WithLabelValues(req.TenantId, req.Resource).Inc()
 		}
 
 		resp := api.RateLimitResponse{

@@ -1,0 +1,53 @@
+groups:
+- name: rate-limiter-availability
+  rules:
+  - alert: RateLimiterDown
+    expr: up{job="rate_limiter"} == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Rate limiter service is down"
+      description: "Prometheus cannot scrape the rate limiter /metrics endpoint"
+
+- name: rate-limiter-errors
+  rules:
+  - alert: RateLimiterInternalErrors
+    expr: increase(rate_limit_errors_total[5m]) > 0
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Rate limiter internal errors detected"
+      description: "Redis or Lua execution errors are occuring"
+
+- name: rate-limiter-traffic
+  rules:
+  - alert: HighRateLimitBlockerRatio
+    expr: |
+      (
+        sum(rate(rate_limit_blocked_total[5m]))
+        /
+        sum(rate(rate_limit_requests_total[5m]))
+      ) > 0.3
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High rate of blocked requests"
+      description: "More than 30% of requests are being rate-limited"
+
+- name: rate-limiter-latency
+  rules:
+  - alert: RateLimiterHighLatency
+    expr: |
+      histogram_quantile(
+        0.95,
+        sum(rate(rate_limit_latency_ms_bucket[5m])) by (le)
+      ) > 50
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High rate limiter latency"
+      description: "95th percentile latency exceeds 50ms"

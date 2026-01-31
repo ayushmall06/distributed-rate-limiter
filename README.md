@@ -656,6 +656,31 @@ The system successfully protected downstream services but highlighted the need f
 
 Unexpected resource values demonstrate the importance of strict validation and anomaly detection in real-world usage.
 
+### Scenario B - Burst Traffic
+
+#### Description
+
+A short-duration, high-concurrency burst was generated to simulate viral or abusive traffic patterns.
+
+#### Observations
+
+- Token bucket capacity was exhausted immediately
+- Nearly all requests were blocked after initial allowance
+- No internal errors were observed
+- Latency increased under concurrency but remained bounded
+
+#### Key Metrics Observed
+
+- Blocked ratio exceeded 99%
+- Initial low-latency requests followed by gradual tail growth
+- Stable system behavior under stress
+
+#### Interpretation
+
+Burst handling behaved exactly as expected for a token bucket algorithm. The system absorbed initial bursts and applied backpressure without failure.
+
+Latency growth under contention was acceptable for a single-region Redis deployment and did not indicate an immediate need for sharding.
+
 ### Implications for Dashboard Design
 
 Load testing directly informed the initial dashboard feature set.
@@ -710,6 +735,109 @@ The following limitations were intentionally accepted at this stage:
 - No authentication or user isolation
 
 These limitations are addressed in subsequent phases.
+
+## 17. Multi-Key Load Testing Results & Error Semantics
+
+### Context
+
+Following strict resource validation and initial multi-key traffic modeling,
+a full multi-key load test was conducted to validate realistic production
+usage patterns and to verify correctness of error classification under load.
+
+This phase represents the closest approximation to real user behavior prior
+to cloud deployment.
+
+
+### Test Characteristics
+
+The load test simulated:
+
+- A single tenant
+- A single valid resource
+- Many independent client keys
+- Concurrent steady traffic
+
+Each client key was rate-limited independently, modeling typical API usage
+where multiple users access the same endpoint concurrently.
+
+
+### Observed System Behavior
+
+Under multi-key load, the system exhibited the following behavior:
+
+- All requests were correctly allowed within configured limits
+- No internal rate limiter errors were recorded
+- Latency remained stable throughout the test
+- Metrics reflected only expected tenant and resource labels
+- No unexpected Redis key creation was observed
+
+Representative metrics showed:
+
+- Zero internal error count
+- Stable throughput
+- Latency p95 within single-digit milliseconds
+
+
+
+### Error Semantics Validation
+
+This phase explicitly validated error classification logic.
+
+The system distinguishes between:
+
+| Category | Description | Treated as Internal Error |
+|--------|-------------|---------------------------|
+| Client validation errors | Unknown or invalid resources | No |
+| Rate-limit enforcement | Token exhaustion (429) | No |
+| System failures | Redis or Lua execution errors | Yes |
+
+Only genuine system failures increment the internal error metric.
+
+This separation ensures:
+
+- High signal-to-noise alerting
+- Accurate operational dashboards
+- No alert fatigue caused by client behavior
+
+
+
+### Implications for Metrics & Dashboards
+
+Multi-key testing confirmed that metrics produced under realistic traffic
+patterns are suitable for end-user dashboards.
+
+Specifically:
+
+- Allowed vs blocked ratios are meaningful
+- Latency percentiles are stable and interpretable
+- Error metrics reflect true system health
+- Metric cardinality remains controlled
+
+These properties are required for a production-grade user-facing dashboard.
+
+
+
+### Readiness Assessment
+
+Based on multi-key load testing and validated error semantics, the system is
+considered ready for deployment to a managed cloud environment.
+
+No immediate changes are required to:
+
+- Rate-limiting algorithm
+- Redis topology
+- Metrics schema
+- Alert definitions
+
+Further scaling decisions will be driven by cloud-level observations.
+
+
+### Outcome
+
+This phase confirms that the rate limiter behaves correctly under realistic
+user traffic, produces trustworthy observability signals, and is suitable
+as the backend foundation for a production dashboard and SaaS offering.
+
 
 ## Observed Debugging Learnings
 
